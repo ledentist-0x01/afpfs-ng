@@ -1,0 +1,387 @@
+Description: <short summary of the patch>
+ TODO: Put a short summary on the line above and replace this paragraph
+ with a longer explanation of this change. Complete the meta-information
+ with other relevant fields (see below for details). To make it easier, the
+ information below has been extracted from the changelog. Adjust it or drop
+ it.
+ .
+ afpfs-ng (0.8.1-5) unstable; urgency=low
+ .
+   * Allow dev package to be multiarch installable.
+Author: Andres Mejia <amejia@debian.org>
+
+---
+The information above should follow the Patch Tagging Guidelines, please
+checkout https://dep.debian.net/deps/dep3/ to learn about the format. Here
+are templates for supplementary fields that you might want to add:
+
+Origin: (upstream|backport|vendor|other), (<patch-url>|commit:<commit-id>)
+Bug: <upstream-bugtracker-url>
+Bug-Debian: https://bugs.debian.org/<bugnumber>
+Bug-Ubuntu: https://launchpad.net/bugs/<bugnumber>
+Forwarded: (no|not-needed|<patch-forwarded-url>)
+Applied-Upstream: <version>, (<commit-url>|commit:<commid-id>)
+Reviewed-By: <name and email of someone who approved/reviewed the patch>
+Last-Update: 2026-10-26
+
+--- afpfs-ng-0.8.1.orig/cmdline/cmdline_afp.c
++++ afpfs-ng-0.8.1/cmdline/cmdline_afp.c
+@@ -1217,7 +1217,7 @@ int cmdline_afp_setup(int recursive, cha
+ {
+ 	struct passwd * passwd;
+ 
+-	snprintf(curdir,PATH_MAX,"%s",DEFAULT_DIRECTORY);
++	snprintf(curdir,AFP_MAX_PATH,"%s",DEFAULT_DIRECTORY);
+ 	if (init_uams()<0) return -1;
+ 
+ 	afp_default_url(&url);
+--- afpfs-ng-0.8.1.orig/cmdline/cmdline_afp.h
++++ afpfs-ng-0.8.1/cmdline/cmdline_afp.h
+@@ -1,7 +1,7 @@
+ #ifndef CMDLINE_AFP_H_
+ #define CMDLINE_AFP_H_
+ 
+-int full_url;
++extern int full_url;
+ 
+ int com_connect(char * arg);
+ int com_dir(char * arg);
+@@ -29,4 +29,6 @@ void cmdline_afp_exit(void);
+ 
+ int cmdline_afp_setup(int recursive, char * url_string);
+ 
++void cmdline_afp_setup_client(void);
++
+ #endif
+--- afpfs-ng-0.8.1.orig/cmdline/cmdline_main.c
++++ afpfs-ng-0.8.1/cmdline/cmdline_main.c
+@@ -17,6 +17,7 @@
+ #include <getopt.h>
+ #include <ctype.h>
+ #include <signal.h>
++#include "afp.h"
+ #include "cmdline_afp.h"
+ #include "cmdline_testafp.h"
+ 
+--- afpfs-ng-0.8.1.orig/cmdline/cmdline_testafp.c
++++ afpfs-ng-0.8.1/cmdline/cmdline_testafp.c
+@@ -10,6 +10,7 @@
+ 
+ #include <stdlib.h>
+ #include <stdio.h>
++#include <string.h>
+ 
+ extern struct afp_volume * vol;
+ 
+@@ -42,7 +43,7 @@ static int test_one_url(char * url_strin
+ 	return 0;
+ }
+ 
+-int test_urls(void)
++int test_urls(char *arg)
+ {
+ 
+ 	printf("Testing URL parsing\n");
+--- afpfs-ng-0.8.1.orig/cmdline/cmdline_testafp.h
++++ afpfs-ng-0.8.1/cmdline/cmdline_testafp.h
+@@ -1,4 +1,4 @@
+ #ifndef __CMDLINE_TESTAFP_H_
+-int test_urls(void);
++int test_urls(char *arg);
+ #endif
+ 
+--- afpfs-ng-0.8.1.orig/cmdline/getstatus.c
++++ afpfs-ng-0.8.1/cmdline/getstatus.c
+@@ -1,4 +1,5 @@
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <pthread.h>
+ 
+--- afpfs-ng-0.8.1.orig/fuse/client.c
++++ afpfs-ng-0.8.1/fuse/client.c
+@@ -10,6 +10,7 @@
+ #include <unistd.h>
+ #include <errno.h>
+ #include <grp.h>
++#include <libgen.h>
+ 
+ #include "config.h"
+ #include <afp.h>
+@@ -61,7 +62,7 @@ static int start_afpfsd(void)
+ 			snprintf(filename, PATH_MAX,
+ 				"/usr/local/bin/%s",AFPFSD_FILENAME);
+ 			if (access(filename,X_OK)) {
+-				snprintf(filename, "/usr/bin/%s",
++				snprintf(filename, PATH_MAX, "/usr/bin/%s",
+ 					AFPFSD_FILENAME);
+ 				if (access(filename,X_OK)) {
+ 					printf("Could not find server (%s)\n",
+--- afpfs-ng-0.8.1.orig/fuse/commands.c
++++ afpfs-ng-0.8.1/fuse/commands.c
+@@ -213,7 +213,7 @@ static void * start_fuse_thread(void * o
+ 		fuseargc++;
+ 	}
+ 	
+-	if (arg->changeuid) {
++	if (arg->changeuid || (geteuid() == 0)) {
+ 		fuseargv[fuseargc]="-o";
+ 		fuseargc++;
+ 		fuseargv[fuseargc]="allow_other";
+--- afpfs-ng-0.8.1.orig/fuse/daemon.c
++++ afpfs-ng-0.8.1/fuse/daemon.c
+@@ -25,6 +25,9 @@
+ 
+ #include "afp.h"
+ 
++#define FUSE_USE_VERSION 25
++#include <fuse.h>
++
+ #include "dsi.h"
+ #include "afp_server.h"
+ #include "utils.h"
+--- afpfs-ng-0.8.1.orig/fuse/fuse_int.c
++++ afpfs-ng-0.8.1/fuse/fuse_int.c
+@@ -197,7 +197,7 @@ static int fuse_open(const char *path, s
+ 	ret = ml_open(volume,path,flags,&fp);
+ 
+ 	if (ret==0) 
+-		fi->fh=(void *) fp;
++		fi->fh=(uint64_t)(uintptr_t) fp;
+ 
+ 	return ret;
+ }
+--- afpfs-ng-0.8.1.orig/lib/afp.c
++++ afpfs-ng-0.8.1/lib/afp.c
+@@ -261,7 +261,7 @@ int afp_unmount_volume(struct afp_volume
+ 	if (afp_volclose(volume)!=kFPNoErr) emergency=1;
+ 	free_entire_did_cache(volume);
+ 	remove_fork_list(volume);
+-	if (volume->dtrefnum) afp_closedt(server,volume->dtrefnum);
++	if (volume->dtrefnum) afp_closedt(server,&volume->dtrefnum);
+ 	volume->dtrefnum=0;
+ 
+ 	if (libafpclient->unmount_volume)
+@@ -563,11 +563,8 @@ int afp_connect_volume(struct afp_volume
+ 
+ 	if (volume->signature != AFP_VOL_FIXED) {
+ 		*l+=snprintf(mesg,max-*l,
+-			"Volume %s does not support fixed directories\n",
+-			volume->volume_name_printable);
+-		afp_unmount_volume(volume);
+-		goto error;
+-
++			"Volume %s reports signature %d (not fixed); continuing anyway\n",
++			volume->volume_name_printable, volume->signature);
+ 	}
+ 
+ 	if (server->using_version->av_number >=30) {
+--- afpfs-ng-0.8.1.orig/lib/dsi.c
++++ afpfs-ng-0.8.1/lib/dsi.c
+@@ -20,6 +20,7 @@
+ #include <iconv.h>
+ 
+ #include "utils.h"
++#include "codepage.h"
+ #include "dsi.h"
+ #include "afp.h"
+ #include "uams_def.h"
+@@ -474,7 +475,7 @@ void dsi_getstatus_reply(struct afp_serv
+ 	}
+ 	server->flags=ntohs(reply1->flags);
+ 
+-	p=(void *)((unsigned int) server->incoming_buffer + sizeof(*reply1));
++	p=(void *)((char *) server->incoming_buffer + sizeof(*reply1));
+ 	p+=copy_from_pascal(server->server_name,p,AFP_SERVER_NAME_LEN)+1;
+ 
+ 	/* Now work our way through the variable bits */
+@@ -757,7 +758,7 @@ gotenough:
+ 		printf("<<< read() of rest of AFP, %d bytes\n",amount_to_read);
+ 		#endif
+ 		ret = read(server->fd, (void *)
+-		(((unsigned int) server->incoming_buffer)+server->data_read),
++		(server->incoming_buffer+server->data_read),
+ 			amount_to_read);
+ 		if (ret<0) return -1;
+ 		if (ret==0) {
+--- afpfs-ng-0.8.1.orig/lib/loop.c
++++ afpfs-ng-0.8.1/lib/loop.c
+@@ -25,7 +25,7 @@
+ static unsigned char exit_program=0;
+ 
+ static pthread_t ending_thread;
+-static pthread_t main_thread = NULL;
++static pthread_t main_thread = 0;
+ 
+ static int loop_started=0;
+ static pthread_cond_t loop_started_condition;
+@@ -87,7 +87,7 @@ void signal_main_thread(void)
+ static int ending=0;
+ void * just_end_it_now(void * ignore)
+ {
+-	if (ending) return;
++	if (ending) return NULL;
+ 	ending=1;
+ 	if (libafpclient->forced_ending_hook) 
+ 		libafpclient->forced_ending_hook();
+--- afpfs-ng-0.8.1.orig/lib/lowlevel.c
++++ afpfs-ng-0.8.1/lib/lowlevel.c
+@@ -24,6 +24,8 @@
+ #include "codepage.h"
+ #include "utils.h"
+ #include "did.h"
++#include "forklist.h"
++#include "midlevel.h"
+ #include "users.h"
+ 
+ static void set_nonunix_perms(unsigned int * mode, struct afp_file_info *fp) 
+@@ -582,7 +584,7 @@ int ll_getattr(struct afp_volume * volum
+ 	if (volume->server->using_version->av_number>=30)
+ 		stbuf->st_mode |= fp.unixprivs.permissions;
+ 	else
+-		set_nonunix_perms(stbuf,&fp);
++		set_nonunix_perms(&stbuf->st_mode,&fp);
+ 
+ 	stbuf->st_uid=fp.unixprivs.uid;
+ 	stbuf->st_gid=fp.unixprivs.gid;
+--- afpfs-ng-0.8.1.orig/lib/midlevel.c
++++ afpfs-ng-0.8.1/lib/midlevel.c
+@@ -713,7 +713,7 @@ int ml_write(struct afp_volume * volume,
+ {
+ 
+ 	int ret,err=0;
+-	int totalwritten = 0;
++	size_t totalwritten = 0;
+ 	uint64_t sizetowrite, ignored;
+ 	unsigned char flags = 0;
+ 	unsigned int max_packet_size=volume->server->tx_quantum;
+--- afpfs-ng-0.8.1.orig/lib/proto_desktop.c
++++ afpfs-ng-0.8.1/lib/proto_desktop.c
+@@ -180,7 +180,7 @@ int afp_closedt(struct afp_server * serv
+ 	dsi_setup_header(server,&request_packet.dsi_header,DSI_DSICommand);
+ 	request_packet.command=afpCloseDT;
+ 	request_packet.pad=0;  
+-	request_packet.refnum=htons(refnum);
++	request_packet.refnum=htons(*refnum);
+ 
+ 	return dsi_send(server, (char *) &request_packet,
+ 		sizeof(request_packet),DSI_DEFAULT_TIMEOUT,afpCloseDT,NULL);
+--- afpfs-ng-0.8.1.orig/lib/proto_directory.c
++++ afpfs-ng-0.8.1/lib/proto_directory.c
+@@ -293,7 +293,7 @@ int afp_enumerateext2_reply(struct afp_s
+ 			filecur=new_file;
+ 		}
+ 
+-		entry = p;
++		entry = (void *) p;
+ 
+ 		parse_reply_block(server,p+sizeof(*entry),
+ 			ntohs(entry->size),entry->isdir,
+--- afpfs-ng-0.8.1.orig/lib/proto_files.c
++++ afpfs-ng-0.8.1/lib/proto_files.c
+@@ -13,6 +13,7 @@
+ #include "utils.h"
+ #include "dsi_protocol.h"
+ #include "afp_protocol.h"
++#include "afp_replies.h"
+ #include "afp_internal.h"
+ 
+ /* afp_setfileparms, afp_setdirparms and afpsetfiledirparms are all remarkably
+--- afpfs-ng-0.8.1.orig/lib/proto_map.c
++++ afpfs-ng-0.8.1/lib/proto_map.c
+@@ -122,7 +122,7 @@ int afp_mapid_reply(struct afp_server *s
+ 
+ 	if (reply->header.return_code.error_code!=kFPNoErr) return -1;
+ 
+-	copy_from_pascal_two(name,&reply->name,255);
++	copy_from_pascal_two(name,(char *)&reply->name,255);
+ 
+ 	return 0;
+ }
+--- afpfs-ng-0.8.1.orig/lib/proto_session.c
++++ afpfs-ng-0.8.1/lib/proto_session.c
+@@ -127,7 +127,7 @@ int afp_disconnectoldsession(struct afp_
+ 	if ((request=malloc(sizeof(*request) + AFP_TOKEN_MAX_LEN))==NULL)
+ 		return -1;
+ 
+-	token_data  = request + sizeof(*request);
++	token_data  = (char *)request + sizeof(*request);
+ 
+ 	request->type=htons(type);
+ 
+--- afpfs-ng-0.8.1.orig/lib/resource.c
++++ afpfs-ng-0.8.1/lib/resource.c
+@@ -7,6 +7,7 @@
+ #include "resource.h"
+ #include "lowlevel.h"
+ #include "did.h"
++#include "forklist.h"
+ #include "midlevel.h"
+ 
+ #define appledouble ".AppleDouble"
+@@ -362,12 +363,12 @@ int appledouble_truncate(struct afp_volu
+ 			ret=ll_zero_file(volume,fp.forkid,0);
+ 			if (ret<0) {
+ 				afp_closefork(volume,fp.forkid);
+-				remove_opened_fork(volume,fp);
++				remove_opened_fork(volume,&fp);
+ 				free(newpath);
+ 				return ret;
+ 			}
+ 			afp_closefork(volume,fp.forkid);
+-			remove_opened_fork(volume,fp);
++			remove_opened_fork(volume,&fp);
+ 
+ 			return 1;
+ 		case AFP_META_APPLEDOUBLE:
+--- afpfs-ng-0.8.1.orig/lib/resource.h
++++ afpfs-ng-0.8.1/lib/resource.h
+@@ -29,6 +29,9 @@ int appledouble_read(struct afp_volume *
+ 	char * buf, size_t size, off_t offset, size_t * amount_read,
+ 	int * eof);
+ 
++int appledouble_write(struct afp_volume * volume, struct afp_file_info *fp,
++	const char *data, size_t size, off_t offset, size_t *totalwritten);
++
+ int appledouble_close(struct afp_volume * volume, struct afp_file_info * fp);
+ 
+ int appledouble_chmod(struct afp_volume * volume, const char * path, mode_t mode);
+--- afpfs-ng-0.8.1.orig/lib/server.c
++++ afpfs-ng-0.8.1/lib/server.c
+@@ -7,6 +7,7 @@
+ 
+ #include <string.h>
+ #include <time.h>
++#include <sys/time.h>
+ 
+ #include "afp.h"
+ #include "dsi.h"
+--- afpfs-ng-0.8.1.orig/lib/uams.c
++++ afpfs-ng-0.8.1/lib/uams.c
+@@ -36,7 +36,7 @@ static int noauth_login(struct afp_serve
+ static int cleartxt_login(struct afp_server *server, char *username,
+ 				char *passwd);
+ static int cleartxt_passwd(struct afp_server *server, char *username,
+-				char *passwd);
++				char *oldpasswd, char *newpasswd);
+ #ifdef HAVE_LIBGCRYPT
+ static int randnum_login(struct afp_server *server, char *username,
+ 		char *passwd);
+@@ -219,7 +219,7 @@ cleartxt_cleanup:
+  *      +------------------+
+  */
+ static int cleartxt_passwd(struct afp_server *server, 
+-	char *username, char *passwd) {
++	char *username, char *oldpasswd, char *newpasswd) {
+ 
+ 	char *p, *ai = NULL;
+ 	int len, ret;
+@@ -235,7 +235,7 @@ static int cleartxt_passwd(struct afp_se
+ 	else
+ 		p++;
+ 
+-	strncpy(p, passwd, 8);
++	strncpy(p, newpasswd, 8);
+ 
+ 	/* Send the login request on to the server. */
+ 	ret = afp_changepassword(server, "Cleartxt Passwrd", ai, len, NULL);
